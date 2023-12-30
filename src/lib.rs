@@ -27,20 +27,14 @@ impl Vertex {
     }
 }
 
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
-    },
-    Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
-    },
-    Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
-    },
-];
+const MAX_SIDES: usize = 10;
+const RADIUS: f32 = 0.5;
+
+struct Buffer {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
+}
 
 struct State {
     surface: wgpu::Surface,
@@ -50,8 +44,8 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    num_vertices: u32,
+    buffers: Vec<Buffer>,
+    buffer_index: usize,
 }
 
 impl State {
@@ -147,13 +141,49 @@ impl State {
             multiview: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let num_vertices = VERTICES.len() as u32;
+        let buffers: Vec<_> = (3..MAX_SIDES)
+            .map(|n| {
+                let theta = 360.0 / n as f32;
+                let mut vertices: Vec<Vertex> = (0..n)
+                    .map(|i| {
+                        let (sin, cos) = (i as f32 * theta).sin_cos();
+                        Vertex {
+                            position: [-RADIUS * sin, RADIUS * (1.0 - cos), 0.0],
+                            color: [0.0, 0.0, 0.0],
+                        }
+                    })
+                    .collect();
+                vertices.push(Vertex {
+                    position: [0.0, 0.0, 0.0],
+                    color: [0.0, 0.0, 0.0],
+                });
+                let origin = vertices.len() as u16 - 1;
+                let mut temp: Vec<u16> = Vec::from_iter(0..(n as u16));
+                temp.push(0);
+                let indices: Vec<u16> =
+                    temp.windows(2)
+                        .map(|x| vec![x[0], origin, x[1]])
+                        .fold(vec![], |mut acc, x| {
+                            acc.extend_from_slice(&x[..]);
+                            acc
+                        });
+                println!("{:?}", indices);
+                Buffer {
+                    vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Vertex Buffer"),
+                        contents: bytemuck::cast_slice(&vertices[..]),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                    index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Index Buffer"),
+                        contents: bytemuck::cast_slice(&indices[..]),
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
+                    num_indices: indices.len() as u32,
+                }
+            })
+            .collect();
+        let buffer_index = 1;
 
         Self {
             window,
@@ -163,8 +193,8 @@ impl State {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
-            num_vertices,
+            buffers,
+            buffer_index,
         }
     }
 
@@ -182,7 +212,23 @@ impl State {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        false
+        if let WindowEvent::KeyboardInput {
+            input:
+                KeyboardInput {
+                    state,
+                    virtual_keycode: Some(VirtualKeyCode::Space),
+                    ..
+                },
+            ..
+        } = event
+        {
+            if *state == ElementState::Pressed {
+                self.buffer_index = (self.buffer_index + 1) % self.buffers.len();
+            }
+            true
+        } else {
+            false
+        }
     }
 
     fn update(&mut self) {}
@@ -221,8 +267,13 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..self.num_vertices, 0..1);
+            render_pass
+                .set_vertex_buffer(0, self.buffers[self.buffer_index].vertex_buffer.slice(..));
+            render_pass.set_index_buffer(
+                self.buffers[self.buffer_index].index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
+            render_pass.draw_indexed(0..self.buffers[self.buffer_index].num_indices, 0, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
