@@ -7,13 +7,13 @@ pub fn get_vertices(sides: usize) -> Vec<Vertex> {
             let (sin, cos) = (i as f32 * theta).sin_cos();
             Vertex {
                 position: [sin, cos, 0.0],
-                color: [0.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0],
             }
         })
         .collect();
     vertices.push(Vertex {
         position: [0.0, 0.0, 0.0],
-        color: [0.0, 0.0, 0.0],
+        color: [1.0, 1.0, 1.0],
     });
 
     vertices
