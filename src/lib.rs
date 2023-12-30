@@ -1,3 +1,7 @@
+mod shape;
+mod vertex;
+
+use vertex::Vertex;
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
@@ -5,35 +9,30 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0=> Float32x3, 1=> Float32x3];
-
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem;
-
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
-
-const MAX_SIDES: usize = 10;
-const RADIUS: f32 = 0.5;
-
 struct Buffer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+}
+
+impl Buffer {
+    fn new(device: &wgpu::Device, sides: usize) -> Buffer {
+        let vertices = shape::get_vertices(sides);
+        let indices = shape::get_indices(&vertices);
+        Buffer {
+            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&vertices[..]),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(&indices[..]),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            num_indices: indices.len() as u32,
+        }
+    }
 }
 
 struct State {
@@ -141,49 +140,7 @@ impl State {
             multiview: None,
         });
 
-        let buffers: Vec<_> = (3..MAX_SIDES)
-            .map(|n| {
-                let theta = 360.0 / n as f32;
-                let mut vertices: Vec<Vertex> = (0..n)
-                    .map(|i| {
-                        let (sin, cos) = (i as f32 * theta).sin_cos();
-                        Vertex {
-                            position: [-RADIUS * sin, RADIUS * (1.0 - cos), 0.0],
-                            color: [0.0, 0.0, 0.0],
-                        }
-                    })
-                    .collect();
-                vertices.push(Vertex {
-                    position: [0.0, 0.0, 0.0],
-                    color: [0.0, 0.0, 0.0],
-                });
-                let origin = vertices.len() as u16 - 1;
-                let mut temp: Vec<u16> = Vec::from_iter(0..(n as u16));
-                temp.push(0);
-                let indices: Vec<u16> =
-                    temp.windows(2)
-                        .map(|x| vec![x[0], origin, x[1]])
-                        .fold(vec![], |mut acc, x| {
-                            acc.extend_from_slice(&x[..]);
-                            acc
-                        });
-                println!("{:?}", indices);
-                Buffer {
-                    vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&vertices[..]),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                    index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Index Buffer"),
-                        contents: bytemuck::cast_slice(&indices[..]),
-                        usage: wgpu::BufferUsages::INDEX,
-                    }),
-                    num_indices: indices.len() as u32,
-                }
-            })
-            .collect();
-        let buffer_index = 1;
+        let buffers = vec![Buffer::new(&device, 3)];
 
         Self {
             window,
@@ -194,7 +151,7 @@ impl State {
             size,
             render_pipeline,
             buffers,
-            buffer_index,
+            buffer_index: 0,
         }
     }
 
@@ -216,14 +173,26 @@ impl State {
             input:
                 KeyboardInput {
                     state,
-                    virtual_keycode: Some(VirtualKeyCode::Space),
+                    virtual_keycode,
                     ..
                 },
             ..
         } = event
         {
             if *state == ElementState::Pressed {
-                self.buffer_index = (self.buffer_index + 1) % self.buffers.len();
+                match virtual_keycode {
+                    Some(VirtualKeyCode::Right) => {
+                        if self.buffer_index == self.buffers.len() - 1 {
+                            self.buffers
+                                .push(Buffer::new(&self.device, self.buffers.len() + 3));
+                        }
+                        self.buffer_index += 1;
+                    }
+                    Some(VirtualKeyCode::Left) => {
+                        self.buffer_index = self.buffer_index.saturating_sub(1);
+                    }
+                    _ => (),
+                }
             }
             true
         } else {
@@ -294,7 +263,7 @@ pub async fn run() {
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
             state.update();
             match state.render() {
-                Ok(_) => {}
+                Ok(_) => (),
                 Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                 Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
                 Err(e) => eprintln!("{:?}", e),
